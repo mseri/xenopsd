@@ -1730,7 +1730,7 @@ let init_daemon ~task ~path ~args ~name ~domid ~xs ~ready_path ?ready_val ~timeo
 
 let gimtool_m = Mutex.create ()
 
-let start_vgpu ~xs task ?restore_fd domid vgpus vcpus =
+let start_vgpu ~xs task ?(restore = false) ?restore_fd domid vgpus vcpus =
 	let open Xenops_interface.Vgpu in
 	match vgpus with
 	| [{implementation = Nvidia vgpu}] ->
@@ -1742,17 +1742,26 @@ let start_vgpu ~xs task ?restore_fd domid vgpus vcpus =
 			 * nvidia driver. We rely on xapi to refrain from attempting to run
 			 * a vGPU on a device which is passed through to a guest. *)
 			PCI.bind [vgpu.physical_pci_address] PCI.Nvidia;
-			let fds = match restore_fd with
-				| None -> []
-				| Some fd ->
+			match restore_fd, restore with
+				| None, true -> 
+					debug "start_vgpu: restoring but no restore_fd present, skipping"
+				| None, false ->
+				    let _ = debug "start_vgpu: starting with vgpu" in
+					let fds = [] in
+					let args = vgpu_args_of_nvidia domid vcpus vgpu fds in
+					let vgpu_pid = init_daemon ~task ~path:!Xc_resources.vgpu ~args
+						~name:"vgpu" ~domid ~xs ~ready_path:state_path ~timeout:!Xenopsd.vgpu_ready_timeout
+						~cancel ~fds () in
+					Forkhelpers.dontwaitpid vgpu_pid
+				| Some fd, _ ->
 					let uuid = Uuidm.to_string (Uuidm.create `V4) in
-					[uuid, fd]
-			in
-			let args = vgpu_args_of_nvidia domid vcpus vgpu fds in
-			let vgpu_pid = init_daemon ~task ~path:!Xc_resources.vgpu ~args
-				~name:"vgpu" ~domid ~xs ~ready_path:state_path ~timeout:!Xenopsd.vgpu_ready_timeout
-				~cancel ~fds () in
-			Forkhelpers.dontwaitpid vgpu_pid
+				    let _ = debug "start_vgpu: restoring with vgpu (fd: %s)" uuid in
+					let fds = [uuid, fd] in
+					let args = vgpu_args_of_nvidia domid vcpus vgpu fds in
+					let vgpu_pid = init_daemon ~task ~path:!Xc_resources.vgpu ~args
+						~name:"vgpu" ~domid ~xs ~ready_path:state_path ~timeout:!Xenopsd.vgpu_ready_timeout
+						~cancel ~fds () in
+					Forkhelpers.dontwaitpid vgpu_pid
 		end else
 			info "Daemon %s is already running for domain %d" !Xc_resources.vgpu domid;
 
@@ -1780,14 +1789,14 @@ let start_vgpu ~xs task ?restore_fd domid vgpus vcpus =
 		)
 	| _ -> failwith "Unsupported vGPU configuration"
 
-let __start (task: Xenops_task.t) ~xs ~dmpath ?(timeout = !Xenopsd.qemu_dm_ready_timeout) l info domid =
-	debug "Device.Dm.start domid=%d args: [%s]" domid (String.concat " " l);
+let __start (task: Xenops_task.t) ~xs ~dmpath ?(restore = false) ?(timeout = !Xenopsd.qemu_dm_ready_timeout) l info domid =
+	debug "Device.Dm.start domid=%d restore:%s args: [%s]" domid (string_of_bool restore) (String.concat " " l);
 
 	(* start vgpu emulation if appropriate *)
 	let () = match info.disp with
 		| VNC (Vgpu vgpus, _, _, _, _)
 		| SDL (Vgpu vgpus, _) ->
-			start_vgpu ~xs task domid vgpus info.vcpus
+			start_vgpu ~xs task ~restore domid vgpus info.vcpus
 		| _ -> ()
 	in
 
@@ -1804,13 +1813,16 @@ let __start (task: Xenops_task.t) ~xs ~dmpath ?(timeout = !Xenopsd.qemu_dm_ready
 
 let start (task: Xenops_task.t) ~xs ~dmpath ?timeout info domid =
 	let l = cmdline_of_info info false domid in
+	debug "Calling Dm.start";
 	__start task ~xs ~dmpath ?timeout l info domid
 let restore (task: Xenops_task.t) ~xs ~dmpath ?timeout info domid =
 	let l = cmdline_of_info info true domid in
-	__start task ~xs ~dmpath ?timeout l info domid
+	debug "Calling Dm.restore";
+	__start task ~xs ~dmpath ~restore:true ?timeout l info domid
 
 let start_vnconly (task: Xenops_task.t) ~xs ~dmpath ?timeout info domid =
 	let l = vnconly_cmdline ~info domid in
+	debug "Calling Dm.start_vnconly";
 	__start task ~xs ~dmpath ?timeout l info domid
 
 (* suspend/resume is a done by sending signals to qemu *)
