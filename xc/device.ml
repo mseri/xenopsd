@@ -1058,10 +1058,34 @@ let bind_to_i915 devstr =
 	| Some (Supported I915) -> ()
 	| Some drv -> raise (Internal_error (Printf.sprintf "Fail to bind to i915, device is bound to %s" (string_of_driver drv)))
 
+let procfs_nvidia = "/proc/driver/nvidia/gpus"
+
+let nvidia_smi = "/usr/bin/nvidia-smi"
+
+(* Find the GPU with this device ID. *)
+let rec find_gpu devstr = function
+	| [] ->
+		failwith (Printf.sprintf "Couldn't find GPU with device ID %s" devstr)
+	| gpu :: rest ->
+		let gpu_path = Filename.concat procfs_nvidia gpu in
+		let gpu_info_file = Filename.concat gpu_path "information" in
+		let gpu_info = Unixext.string_of_file gpu_info_file in
+		(* Work around due to PCI ID formatting inconsistency. *)
+		let devstr2 = String.copy devstr in
+		devstr2.[7] <- '.';
+		if false
+			|| (Stdext.Xstringext.String.has_substr gpu_info devstr2)
+			|| (Stdext.Xstringext.String.has_substr gpu_info devstr)
+		then gpu_path
+		else find_gpu devstr rest
+
 let bind_to_nvidia devstr =
 	debug "pci: binding device %s to nvidia" devstr;
 	let bind = Filename.concat sysfs_nvidia "bind" in
-	write_string_to_file bind devstr
+	try
+		let _ = find_gpu devstr [devstr] in
+		write_string_to_file bind devstr
+	with _ -> raise (Unimplemented "bind_to_nvidia")
 
 let unbind devstr driver =
 	let driverstr = string_of_driver driver in
@@ -1075,30 +1099,9 @@ let unbind_from_i915 devstr =
 	let (_:string * string) =
 		Forkhelpers.execute_command_get_output !Resources.rmmod ["i915"] in ()
 
-let procfs_nvidia = "/proc/driver/nvidia/gpus"
-
-let nvidia_smi = "/usr/bin/nvidia-smi"
-
 let unbind_from_nvidia devstr =
 	debug "pci: attempting to lock device %s before unbinding from nvidia" devstr;
 	let gpus = Sys.readdir procfs_nvidia in
-	(* Find the GPU with this device ID. *)
-	let rec find_gpu = function
-		| [] ->
-			failwith (Printf.sprintf "Couldn't find GPU with device ID %s" devstr)
-		| gpu :: rest ->
-			let gpu_path = Filename.concat procfs_nvidia gpu in
-			let gpu_info_file = Filename.concat gpu_path "information" in
-			let gpu_info = Unixext.string_of_file gpu_info_file in
-			(* Work around due to PCI ID formatting inconsistency. *)
-			let devstr2 = String.copy devstr in
-			devstr2.[7] <- '.';
-			if false
-				|| (Stdext.Xstringext.String.has_substr gpu_info devstr2)
-				|| (Stdext.Xstringext.String.has_substr gpu_info devstr)
-			then gpu_path
-			else find_gpu rest
-	in
 	(* Disable persistence mode on the device before unbinding it. In future it
 	 * might be worth augmenting gpumon so that it can do this, and to enable
 	 * xapi and/or xenopsd to tell it to do so. *)
@@ -1108,7 +1111,7 @@ let unbind_from_nvidia devstr =
 			["--id="^devstr; "--persistence-mode=0"]
 	in
 	let unbind_lock_path =
-		Filename.concat (find_gpu (Array.to_list gpus)) "unbindLock"
+		Filename.concat (find_gpu devstr (Array.to_list gpus)) "unbindLock"
 	in
 	(* Grab the unbind lock. *)
 	write_string_to_file unbind_lock_path "1\n";
@@ -1741,27 +1744,31 @@ let start_vgpu ~xs task ?(restore = false) ?restore_fd domid vgpus vcpus =
 			(* The below line does nothing if the device is already bound to the
 			 * nvidia driver. We rely on xapi to refrain from attempting to run
 			 * a vGPU on a device which is passed through to a guest. *)
+
+			debug "start_vgpu: got VGPU %s"
+				(Xenops_interface.Pci.string_of_address vgpu.physical_pci_address);
 			PCI.bind [vgpu.physical_pci_address] PCI.Nvidia;
-			match restore_fd, restore with
+			let maybe_fds = match restore_fd, restore with
 				| None, true -> 
-					debug "start_vgpu: restoring but no restore_fd present, skipping"
+					debug "start_vgpu: restoring but no restore_fd present, skipping";
+					None
 				| None, false ->
-				    let _ = debug "start_vgpu: starting with vgpu" in
+				    debug "start_vgpu: starting with vgpu";
 					let fds = [] in
-					let args = vgpu_args_of_nvidia domid vcpus vgpu fds in
-					let vgpu_pid = init_daemon ~task ~path:!Xc_resources.vgpu ~args
-						~name:"vgpu" ~domid ~xs ~ready_path:state_path ~timeout:!Xenopsd.vgpu_ready_timeout
-						~cancel ~fds () in
-					Forkhelpers.dontwaitpid vgpu_pid
+					Some fds
 				| Some fd, _ ->
 					let uuid = Uuidm.to_string (Uuidm.create `V4) in
-				    let _ = debug "start_vgpu: restoring with vgpu (fd: %s)" uuid in
 					let fds = [uuid, fd] in
-					let args = vgpu_args_of_nvidia domid vcpus vgpu fds in
-					let vgpu_pid = init_daemon ~task ~path:!Xc_resources.vgpu ~args
-						~name:"vgpu" ~domid ~xs ~ready_path:state_path ~timeout:!Xenopsd.vgpu_ready_timeout
-						~cancel ~fds () in
-					Forkhelpers.dontwaitpid vgpu_pid
+				    debug "start_vgpu: restoring with vgpu (fd: %s)" uuid ;
+					Some fds
+			in match maybe_fds with
+			| None -> ()
+			| Some fds ->
+				let args = vgpu_args_of_nvidia domid vcpus vgpu fds in
+				let vgpu_pid = init_daemon ~task ~path:!Xc_resources.vgpu ~args
+					~name:"vgpu" ~domid ~xs ~ready_path:state_path ~timeout:!Xenopsd.vgpu_ready_timeout
+					~cancel ~fds () in
+				Forkhelpers.dontwaitpid vgpu_pid
 		end else
 			info "Daemon %s is already running for domain %d" !Xc_resources.vgpu domid;
 
@@ -1813,16 +1820,16 @@ let __start (task: Xenops_task.t) ~xs ~dmpath ?(restore = false) ?(timeout = !Xe
 
 let start (task: Xenops_task.t) ~xs ~dmpath ?timeout info domid =
 	let l = cmdline_of_info info false domid in
-	debug "Calling Dm.start";
+	debug "Called Dm.start";
 	__start task ~xs ~dmpath ?timeout l info domid
 let restore (task: Xenops_task.t) ~xs ~dmpath ?timeout info domid =
 	let l = cmdline_of_info info true domid in
-	debug "Calling Dm.restore";
+	debug "Called Dm.restore";
 	__start task ~xs ~dmpath ~restore:true ?timeout l info domid
 
 let start_vnconly (task: Xenops_task.t) ~xs ~dmpath ?timeout info domid =
 	let l = vnconly_cmdline ~info domid in
-	debug "Calling Dm.start_vnconly";
+	debug "Called Dm.start_vnconly";
 	__start task ~xs ~dmpath ?timeout l info domid
 
 (* suspend/resume is a done by sending signals to qemu *)
@@ -1866,7 +1873,8 @@ let stop ~xs ~qemu_domid domid  =
     stop_qemu ()
 
 let restore_vgpu (task: Xenops_task.t) ~xs restore_fd domid vgpu vcpus =
-	start_vgpu ~xs task ~restore_fd domid [vgpu] vcpus
+	debug "Called Dm.restore_vgpu";
+	start_vgpu ~xs task ~restore:true ~restore_fd domid [vgpu] vcpus
 
 end (* End of module Dm *)
 
