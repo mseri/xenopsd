@@ -1082,10 +1082,7 @@ let rec find_nvidia_gpu devstr = function
 let bind_to_nvidia devstr =
 	debug "pci: binding device %s to nvidia" devstr;
 	let bind = Filename.concat sysfs_nvidia "bind" in
-	try
-		let _ = find_nvidia_gpu devstr [devstr] in
-		write_string_to_file bind devstr
-	with _ -> raise (Unimplemented "bind_to_nvidia")
+	write_string_to_file bind devstr
 
 let unbind devstr driver =
 	let driverstr = string_of_driver driver in
@@ -1745,21 +1742,23 @@ let start_vgpu ~xs task ?(restore = false) ?restore_fd domid vgpus vcpus =
 			 * nvidia driver. We rely on xapi to refrain from attempting to run
 			 * a vGPU on a device which is passed through to a guest. *)
 
-			debug "start_vgpu: got VGPU %s"
+			debug "start_vgpu: got VGPU with physical pci address %s"
 				(Xenops_interface.Pci.string_of_address vgpu.physical_pci_address);
-			PCI.bind [vgpu.physical_pci_address] PCI.Nvidia;
+			
 			let maybe_fds = match restore_fd, restore with
 				| None, true -> 
 					debug "start_vgpu: restoring but no restore_fd present, skipping";
 					None
 				| None, false ->
 				    debug "start_vgpu: starting with vgpu";
+					PCI.bind [vgpu.physical_pci_address] PCI.Nvidia;
 					let fds = [] in
 					Some fds
 				| Some fd, _ ->
 					let uuid = Uuidm.to_string (Uuidm.create `V4) in
 					let fds = [uuid, fd] in
-				    debug "start_vgpu: restoring with vgpu (fd: %s)" uuid ;
+				    debug "start_vgpu: restoring with vgpu (fd: %s)" uuid;
+					PCI.bind [vgpu.physical_pci_address] PCI.Nvidia;
 					Some fds
 			in match maybe_fds with
 			| None -> ()
@@ -1768,7 +1767,7 @@ let start_vgpu ~xs task ?(restore = false) ?restore_fd domid vgpus vcpus =
 				let vgpu_pid = init_daemon ~task ~path:!Xc_resources.vgpu ~args
 					~name:"vgpu" ~domid ~xs ~ready_path:state_path ~timeout:!Xenopsd.vgpu_ready_timeout
 					~cancel ~fds () in
-				Forkhelpers.dontwaitpid vgpu_pid
+				Forkhelpers.dontwaitpid vgpu_pid;
 		end else
 			info "Daemon %s is already running for domain %d" !Xc_resources.vgpu domid;
 

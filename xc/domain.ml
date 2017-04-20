@@ -1049,7 +1049,7 @@ let restore (task: Xenops_task.t) ~xc ~xs ~store_domid ~console_domid ~no_incr_g
 
 let restore_vgpu (task: Xenops_task.t) ~xc ~xs domid fd vgpu vcpus =
 	let uuid = get_uuid ~xc domid in
-	debug "VM = %s; domid = %d; restore_vgpu" (Uuid.to_string uuid) domid;
+	debug "VM = %s; domid = %d; fd = %d; restore_vgpu" (Uuid.to_string uuid) (Obj.magic fd) domid;
 	let open Suspend_image in let open Suspend_image.M in
 	let res =
 		read_header fd >>= function

@@ -2159,19 +2159,21 @@ module VM = struct
 		let dbg = List.assoc "dbg" cookies in
 		Debug.with_thread_associated dbg
 		(fun () ->
-			let is_localhost, vgpu_id = Debug.with_thread_associated dbg
+			let is_localhost, vm_id, vgpu_id = Debug.with_thread_associated dbg
 				debug "VM.receive_vgpu";
 				let remote_instance = List.assoc "instance_id" cookies in
 				let is_localhost = instance_id = remote_instance in
 				(* The URI is /service/xenops/migrate-vgpu/id *)
 				let bits = Stdext.Xstringext.String.split '/' (Uri.path uri) in
 				let vgpu_id_str = bits |> List.rev |> List.hd in
-				debug "VM.receive_vgpu vgpu_id_str = %s is_localhost = %b" vgpu_id_str is_localhost;
-				is_localhost, VGPU_DB.id_of_string vgpu_id_str
+				let vgpu_id = VGPU_DB.id_of_string vgpu_id_str in
+				let vm_id = VGPU_DB.vm_of vgpu_id in
+				debug "VM.receive_vgpu vm_id = %s vgpu_id_str = %s is_localhost = %b" vm_id vgpu_id_str is_localhost;
+				is_localhost, vm_id, vgpu_id
 			in
-			let vm_id = VGPU_DB.vm_of vgpu_id in
 			match context.transferred_fd with
 			| Some transferred_fd ->
+				debug "receive_vgpu: passed fd %d" (Obj.magic transferred_fd);
 				let op = Atomic (VM_restore_vgpu(vm_id, vgpu_id, FD transferred_fd)) in
 				(* If it's a localhost migration then we're already in the queue *)
 				let task =
