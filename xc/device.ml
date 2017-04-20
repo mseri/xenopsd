@@ -1063,7 +1063,7 @@ let procfs_nvidia = "/proc/driver/nvidia/gpus"
 let nvidia_smi = "/usr/bin/nvidia-smi"
 
 (* Find the GPU with this device ID. *)
-let rec find_gpu devstr = function
+let rec find_nvidia_gpu devstr = function
 	| [] ->
 		failwith (Printf.sprintf "Couldn't find GPU with device ID %s" devstr)
 	| gpu :: rest ->
@@ -1077,13 +1077,13 @@ let rec find_gpu devstr = function
 			|| (Stdext.Xstringext.String.has_substr gpu_info devstr2)
 			|| (Stdext.Xstringext.String.has_substr gpu_info devstr)
 		then gpu_path
-		else find_gpu devstr rest
+		else find_nvidia_gpu devstr rest
 
 let bind_to_nvidia devstr =
 	debug "pci: binding device %s to nvidia" devstr;
 	let bind = Filename.concat sysfs_nvidia "bind" in
 	try
-		let _ = find_gpu devstr [devstr] in
+		let _ = find_nvidia_gpu devstr [devstr] in
 		write_string_to_file bind devstr
 	with _ -> raise (Unimplemented "bind_to_nvidia")
 
@@ -1111,7 +1111,7 @@ let unbind_from_nvidia devstr =
 			["--id="^devstr; "--persistence-mode=0"]
 	in
 	let unbind_lock_path =
-		Filename.concat (find_gpu devstr (Array.to_list gpus)) "unbindLock"
+		Filename.concat (find_nvidia_gpu devstr (Array.to_list gpus)) "unbindLock"
 	in
 	(* Grab the unbind lock. *)
 	write_string_to_file unbind_lock_path "1\n";
