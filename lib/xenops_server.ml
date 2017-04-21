@@ -1539,18 +1539,18 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 						Request.write (fun _ -> ()) request fd
 					) in
 
-					(*do_request mem_fd ["memory_limit", Int64.to_string state.Vm.memory_limit] memory_url;
-
-					begin match Handshake.recv mem_fd with
-						| Handshake.Success -> ()
-						| Handshake.Error msg ->
-							error "cannot transmit vm to host: %s" msg;
-							raise (Internal_error msg)
-					end;*)
-
 					debug "VM.migrate: Synchronisation point 1";
 
 					let save_vm_then_handshake ?vgpu () = (
+						do_request mem_fd ["memory_limit", Int64.to_string state.Vm.memory_limit] memory_url;
+
+						begin match Handshake.recv mem_fd with
+							| Handshake.Success -> ()
+							| Handshake.Error msg ->
+								error "cannot transmit vm to host: %s" msg;
+								raise (Internal_error msg)
+						end;
+
 						let atom = match vgpu with
 							| Some (vgpu_id, vgpu_fd) ->
 								let save = VM_save (id, [ Live ], FD mem_fd, Some (FD vgpu_fd)) in
