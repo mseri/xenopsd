@@ -1520,37 +1520,26 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 			let state = B.VM.get_state vm in
 			info "VM %s has memory_limit = %Ld" id state.Vm.memory_limit;
 
-			Open_uri.with_open_uri memory_url
+			let do_request fd extra_cookies url = (
+				Sockopt.set_sock_keepalives fd;
+				let module Request = Cohttp.Request.Make(Cohttp_posix_io.Unbuffered_IO) in
+				let cookies = [
+					"instance_id", instance_id;
+					"dbg", t.Xenops_task.dbg;
+				] @ extra_cookies in
+				let headers = Cohttp.Header.of_list (
+					Cohttp.Cookie.Cookie_hdr.serialize cookies :: [
+						"Connection", "keep-alive";
+						"User-agent", "xenopsd";
+					]) in
+				let request = Cohttp.Request.make ~meth:`PUT ~version:`HTTP_1_1 ~headers url in
+				Request.write (fun _ -> ()) request fd
+			) in
+
+			let proceed_with_memory vgpu_tuple = Open_uri.with_open_uri memory_url
 				(fun mem_fd ->
 					let module Handshake = Xenops_migrate.Handshake in
-					let do_request fd extra_cookies url = (
-						Sockopt.set_sock_keepalives fd;
-						let module Request = Cohttp.Request.Make(Cohttp_posix_io.Unbuffered_IO) in
-						let cookies = [
-							"instance_id", instance_id;
-							"dbg", t.Xenops_task.dbg;
-						] @ extra_cookies in
-						let headers = Cohttp.Header.of_list (
-							Cohttp.Cookie.Cookie_hdr.serialize cookies :: [
-								"Connection", "keep-alive";
-								"User-agent", "xenopsd";
-							]) in
-						let request = Cohttp.Request.make ~meth:`PUT ~version:`HTTP_1_1 ~headers url in
-						Request.write (fun _ -> ()) request fd
-					) in
-
-					debug "VM.migrate: Synchronisation point 1";
-
-					let save_vm_then_handshake ?vgpu () = (
-						do_request mem_fd ["memory_limit", Int64.to_string state.Vm.memory_limit] memory_url;
-
-						begin match Handshake.recv mem_fd with
-							| Handshake.Success -> ()
-							| Handshake.Error msg ->
-								error "cannot transmit vm to host: %s" msg;
-								raise (Internal_error msg)
-						end;
-
+					let save_vm_then_handshake vgpu = (
 						let atom = match vgpu with
 							| Some (vgpu_id, vgpu_fd) ->
 								let save = VM_save (id, [ Live ], FD mem_fd, Some (FD vgpu_fd)) in
@@ -1568,20 +1557,31 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 						Handshake.recv_success mem_fd;
 						debug "VM.migrate: Synchronisation point 4";
 					) in
+					
+					debug "VM.migrate: Synchronisation point 1";
 
-					(* If we have a vGPU, kick off its migration process before
-					 * starting the main VM migration sequence. *)
-					match VGPU_DB.ids id with
-					| [] ->
-						save_vm_then_handshake ()
-					| [vgpu_id] ->
-						let vgpu_url = make_url "/migrate-vgpu/" (VGPU_DB.string_of_id vgpu_id) in
-						Open_uri.with_open_uri vgpu_url (fun vgpu_fd ->
-							do_request vgpu_fd [] vgpu_url;
-							save_vm_then_handshake ~vgpu:(vgpu_id, vgpu_fd) ()
-						)
-					| _ -> raise (Internal_error "Migration of a VM with more than one VGPU is not supported.")
-				);
+					do_request mem_fd ["memory_limit", Int64.to_string state.Vm.memory_limit] memory_url;
+					begin match Handshake.recv mem_fd with
+						| Handshake.Success -> ()
+						| Handshake.Error msg ->
+							error "cannot transmit vm to host: %s" msg;
+							raise (Internal_error msg)
+					end;
+					save_vm_then_handshake vgpu_tuple
+				)
+			in
+			(* If we have a vGPU, kick off its migration process before
+			* starting the main VM migration sequence. *)
+			begin match VGPU_DB.ids id with
+				| [] -> proceed_with_memory None
+				| [vgpu_id] ->
+					let vgpu_url = make_url "/migrate-vgpu/" (VGPU_DB.string_of_id vgpu_id) in
+					Open_uri.with_open_uri vgpu_url (fun vgpu_fd ->
+						do_request vgpu_fd [] vgpu_url;
+						proceed_with_memory (Some (vgpu_id, vgpu_fd))
+					)
+				| _ -> raise (Internal_error "Migration of a VM with more than one VGPU is not supported.")
+			end;
 			let atomics = [
 				VM_hook_script(id, Xenops_hooks.VM_pre_destroy, Xenops_hooks.reason__suspend);
 			] @ (atomics_of_operation (VM_shutdown (id, None))) @ [
