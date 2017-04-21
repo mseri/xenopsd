@@ -1744,7 +1744,8 @@ let start_vgpu ~xs task ?(restore = false) ?restore_fd domid vgpus vcpus =
 
 			debug "start_vgpu: got VGPU with physical pci address %s"
 				(Xenops_interface.Pci.string_of_address vgpu.physical_pci_address);
-			
+			PCI.bind [vgpu.physical_pci_address] PCI.Nvidia;
+
 			let maybe_fds = match restore_fd, restore with
 				| None, true -> 
 					debug "start_vgpu: restoring but no restore_fd present, skipping bind";
@@ -1753,14 +1754,12 @@ let start_vgpu ~xs task ?(restore = false) ?restore_fd domid vgpus vcpus =
 					Some fds
 				| None, false ->
 				    debug "start_vgpu: starting with vgpu";
-					PCI.bind [vgpu.physical_pci_address] PCI.Nvidia;
 					let fds = [] in
 					Some fds
 				| Some fd, _ ->
 					let uuid = Uuidm.to_string (Uuidm.create `V4) in
 					let fds = [uuid, fd] in
 				    debug "start_vgpu: restoring with vgpu (fd: %s)" uuid;
-					PCI.bind [vgpu.physical_pci_address] PCI.Nvidia;
 					Some fds
 			in match maybe_fds with
 			| None -> ()
