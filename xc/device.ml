@@ -1737,7 +1737,7 @@ let start_vgpu ~xs task ?(restore = false) ?restore_fd domid vgpus vcpus =
 		(* Start DEMU and wait until it has reached the "initialising" or "restoring" state *)
 		let state_path = Printf.sprintf "/local/domain/%d/vgpu/state" domid in
 		let cancel = Cancel_utils.Vgpu domid in
-		let should_wait = if not (Vgpu.is_running ~xs domid) then begin
+		if not (Vgpu.is_running ~xs domid) then begin
 			(* The below line does nothing if the device is already bound to the
 			 * nvidia driver. We rely on xapi to refrain from attempting to run
 			 * a vGPU on a device which is passed through to a guest. *)
@@ -1747,8 +1747,10 @@ let start_vgpu ~xs task ?(restore = false) ?restore_fd domid vgpus vcpus =
 			
 			let maybe_fds = match restore_fd, restore with
 				| None, true -> 
-					debug "start_vgpu: restoring but no restore_fd present, skipping";
-					None
+					debug "start_vgpu: restoring but no restore_fd present, skipping bind";
+					(*None*)
+					let fds = [] in
+					Some fds
 				| None, false ->
 				    debug "start_vgpu: starting with vgpu";
 					PCI.bind [vgpu.physical_pci_address] PCI.Nvidia;
@@ -1761,19 +1763,16 @@ let start_vgpu ~xs task ?(restore = false) ?restore_fd domid vgpus vcpus =
 					PCI.bind [vgpu.physical_pci_address] PCI.Nvidia;
 					Some fds
 			in match maybe_fds with
-			| None -> false
+			| None -> ()
 			| Some fds ->
 				let args = vgpu_args_of_nvidia domid vcpus vgpu fds in
 				let vgpu_pid = init_daemon ~task ~path:!Xc_resources.vgpu ~args
 					~name:"vgpu" ~domid ~xs ~ready_path:state_path ~timeout:!Xenopsd.vgpu_ready_timeout
 					~cancel ~fds () in
-				Forkhelpers.dontwaitpid vgpu_pid;
-				true
-		end else begin
+				Forkhelpers.dontwaitpid vgpu_pid
+		end else
 			info "Daemon %s is already running for domain %d" !Xc_resources.vgpu domid;
-			true
-		end in
-		if should_wait then begin
+
 			(* Keep waiting until DEMU's state becomes "running", which means that it is
 			* ready to run the VM. *)
 			let good_watch = Watch.value_to_become state_path "running" in
@@ -1786,8 +1785,7 @@ let start_vgpu ~xs task ?(restore = false) ?restore_fd domid vgpus vcpus =
 				error "Daemon vgpu returned error: %s" error_code;
 				raise (Ioemu_failed ("vgpu", Printf.sprintf "Daemon vgpu returned error: %s" error_code))
 			end
-		end else
-			debug "should_wait = false; proceeding without vgpu";
+
 	| [{implementation = GVT_g vgpu}] ->
 		PCI.bind [vgpu.physical_pci_address] PCI.I915
 	| [{implementation = MxGPU vgpu}] ->
