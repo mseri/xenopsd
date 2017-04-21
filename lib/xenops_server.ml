@@ -1539,6 +1539,15 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 			let proceed_with_memory vgpu_tuple = Open_uri.with_open_uri memory_url
 				(fun mem_fd ->
 					let module Handshake = Xenops_migrate.Handshake in
+					let memory_limit_request () =
+						do_request mem_fd ["memory_limit", Int64.to_string state.Vm.memory_limit] memory_url;
+						begin match Handshake.recv mem_fd with
+							| Handshake.Success -> ()
+							| Handshake.Error msg ->
+								error "cannot transmit vm to host: %s" msg;
+								raise (Internal_error msg)
+						end
+					in
 					let save_vm_then_handshake vgpu = (
 						let atom = match vgpu with
 							| Some (vgpu_id, vgpu_fd) ->
@@ -1557,17 +1566,11 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 						Handshake.recv_success mem_fd;
 						debug "VM.migrate: Synchronisation point 4";
 					) in
-					
-					debug "VM.migrate: Synchronisation point 1";
 
-					do_request mem_fd ["memory_limit", Int64.to_string state.Vm.memory_limit] memory_url;
-					begin match Handshake.recv mem_fd with
-						| Handshake.Success -> ()
-						| Handshake.Error msg ->
-							error "cannot transmit vm to host: %s" msg;
-							raise (Internal_error msg)
-					end;
-					save_vm_then_handshake vgpu_tuple
+					debug "VM.migrate: Synchronisation point 1";
+					save_vm_then_handshake vgpu_tuple;
+					memory_limit_request ();
+					debug "VM.migrate: Synchronisation point 5";
 				)
 			in
 			(* If we have a vGPU, kick off its migration process before
