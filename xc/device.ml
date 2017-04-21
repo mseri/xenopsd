@@ -1625,7 +1625,7 @@ let vgpu_args_of_nvidia domid vcpus (vgpu:Xenops_interface.Vgpu.nvidia) fds =
 	] in
 	let fd_arg = match fds with
 		| [] -> []
-		| (uuid, _) :: _ -> ["--resumefd"; uuid]
+		| (uuid, _) :: _ -> ["--resumefd=" ^ uuid]
 	in
 	let resume_arg =
 		if Sys.file_exists resume_file
@@ -1737,7 +1737,7 @@ let start_vgpu ~xs task ?(restore = false) ?restore_fd domid vgpus vcpus =
 		(* Start DEMU and wait until it has reached the "initialising" or "restoring" state *)
 		let state_path = Printf.sprintf "/local/domain/%d/vgpu/state" domid in
 		let cancel = Cancel_utils.Vgpu domid in
-		if not (Vgpu.is_running ~xs domid) || restore_fd <> None then begin
+		if restore || not (Vgpu.is_running ~xs domid) then begin
 			(* The below line does nothing if the device is already bound to the
 			 * nvidia driver. We rely on xapi to refrain from attempting to run
 			 * a vGPU on a device which is passed through to a guest. *)
@@ -1748,7 +1748,7 @@ let start_vgpu ~xs task ?(restore = false) ?restore_fd domid vgpus vcpus =
 
 			let maybe_fds = match restore_fd, restore with
 				| None, true -> 
-					debug "start_vgpu: restoring but no restore_fd present, skipping bind";
+					debug "start_vgpu: restoring but no restore_fd present";
 					(*None*)
 					let fds = [] in
 					Some fds
