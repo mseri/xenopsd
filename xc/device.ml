@@ -1734,13 +1734,8 @@ let start_vgpu ~xs task ?(restore = false) ?restore_fd domid vgpus vcpus =
 	let open Xenops_interface.Vgpu in
 	match vgpus with
 	| [{implementation = Nvidia vgpu}] ->
-
-		if restore then 
-			let msg = "start_vgpu: called with restore: true, " ^
-				match restore_fd with
-					| None -> "restore_fd: None"
-					| Some fd -> Printf.sprintf "restore_fd: Some %d" (Obj.magic fd)
-			in debug "%s" msg;
+		if restore then debug "start_vgpu: called with restore:true and %s restore_fd"
+			(if restore_fd = None then "without" else "with");
 
 		(* Start DEMU and wait until it has reached the "initialising" or "restoring" state *)
 		let state_path = Printf.sprintf "/local/domain/%d/vgpu/state" domid in
