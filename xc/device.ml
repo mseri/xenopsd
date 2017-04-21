@@ -1740,7 +1740,7 @@ let start_vgpu ~xs task ?(restore = false) ?restore_fd domid vgpus vcpus =
 		(* Start DEMU and wait until it has reached the "initialising" or "restoring" state *)
 		let state_path = Printf.sprintf "/local/domain/%d/vgpu/state" domid in
 		let cancel = Cancel_utils.Vgpu domid in
-		if not (Vgpu.is_running ~xs domid) then begin
+		if restore || not (Vgpu.is_running ~xs domid) then begin
 			(* The below line does nothing if the device is already bound to the
 			 * nvidia driver. We rely on xapi to refrain from attempting to run
 			 * a vGPU on a device which is passed through to a guest. *)
@@ -1754,6 +1754,15 @@ let start_vgpu ~xs task ?(restore = false) ?restore_fd domid vgpus vcpus =
 					[uuid, fd]
 			in
 			let args = vgpu_args_of_nvidia domid vcpus vgpu fds in
+			if restore_fd <> None then
+				let old_pid = Vgpu.pid ~xs domid in
+				match old_pid with
+				| None -> 
+					debug "vgpu daemon needs to be started"
+				| Some pid -> begin
+					debug "vgpu daemon is running but we need to restore the vgpu, killing it";
+					Unix.kill pid 9
+				end;
 			let vgpu_pid = init_daemon ~task ~path:!Xc_resources.vgpu ~args
 				~name:"vgpu" ~domid ~xs ~ready_path:state_path ~timeout:!Xenopsd.vgpu_ready_timeout
 				~cancel ~fds () in
