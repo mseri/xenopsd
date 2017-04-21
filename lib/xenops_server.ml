@@ -1518,7 +1518,6 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 
 			(* Find out the VM's current memory_limit: this will be used to allocate memory on the receiver *)
 			let state = B.VM.get_state vm in
-			info "VM %s has memory_limit = %Ld" id state.Vm.memory_limit;
 
 			let do_request fd extra_cookies url = (
 				Sockopt.set_sock_keepalives fd;
@@ -1540,6 +1539,7 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 				(fun mem_fd ->
 					let module Handshake = Xenops_migrate.Handshake in
 					let memory_limit_request () =
+						info "VM %s has memory_limit = %Ld" id state.Vm.memory_limit;
 						do_request mem_fd ["memory_limit", Int64.to_string state.Vm.memory_limit] memory_url;
 						begin match Handshake.recv mem_fd with
 							| Handshake.Success -> ()
@@ -1567,10 +1567,9 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 						debug "VM.migrate: Synchronisation point 4";
 					) in
 
+					memory_limit_request ();
 					debug "VM.migrate: Synchronisation point 1";
 					save_vm_then_handshake vgpu_tuple;
-					memory_limit_request ();
-					debug "VM.migrate: Synchronisation point 5";
 				)
 			in
 			(* If we have a vGPU, kick off its migration process before
