@@ -1518,7 +1518,6 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 
 			(* Find out the VM's current memory_limit: this will be used to allocate memory on the receiver *)
 			let state = B.VM.get_state vm in
-			info "VM %s has memory_limit = %Ld" id state.Vm.memory_limit;
 
 			Open_uri.with_open_uri memory_url
 				(fun mem_fd ->
@@ -1539,17 +1538,18 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 						Request.write (fun _ -> ()) request fd
 					) in
 
+					info "VM %s has memory_limit = %Ld" id state.Vm.memory_limit;
+					do_request mem_fd ["memory_limit", Int64.to_string state.Vm.memory_limit] memory_url;
+
+					begin match Handshake.recv mem_fd with
+						| Handshake.Success -> ()
+						| Handshake.Error msg ->
+							error "cannot transmit vm to host: %s" msg;
+							raise (Internal_error msg)
+					end;
 					debug "VM.migrate: Synchronisation point 1";
 
 					let save_vm_then_handshake ?vgpu () = (
-						do_request mem_fd ["memory_limit", Int64.to_string state.Vm.memory_limit] memory_url;
-
-						begin match Handshake.recv mem_fd with
-							| Handshake.Success -> ()
-							| Handshake.Error msg ->
-								error "cannot transmit vm to host: %s" msg;
-								raise (Internal_error msg)
-						end;
 
 						let atom = match vgpu with
 							| Some (vgpu_id, vgpu_fd) ->
