@@ -1734,66 +1734,50 @@ let start_vgpu ~xs task ?(restore = false) ?restore_fd domid vgpus vcpus =
 	let open Xenops_interface.Vgpu in
 	match vgpus with
 	| [{implementation = Nvidia vgpu}] ->
+
+		if restore then 
+			let msg = "start_vgpu: called with restore: true, " ^
+				match restore_fd with
+					| None -> "restore_fd: None"
+					| Some fd -> Printf.sprintf "restore_fd: Some %d" (Obj.magic fd)
+			in debug "%s" msg;
+
 		(* Start DEMU and wait until it has reached the "initialising" or "restoring" state *)
 		let state_path = Printf.sprintf "/local/domain/%d/vgpu/state" domid in
 		let cancel = Cancel_utils.Vgpu domid in
-		if restore || not (Vgpu.is_running ~xs domid) then begin
+		if not (Vgpu.is_running ~xs domid) then begin
 			(* The below line does nothing if the device is already bound to the
 			 * nvidia driver. We rely on xapi to refrain from attempting to run
 			 * a vGPU on a device which is passed through to a guest. *)
-
 			debug "start_vgpu: got VGPU with physical pci address %s"
 				(Xenops_interface.Pci.string_of_address vgpu.physical_pci_address);
 			PCI.bind [vgpu.physical_pci_address] PCI.Nvidia;
-
-			let maybe_fds = match restore_fd, restore with
-				| None, true -> 
-					debug "start_vgpu: restoring but no restore_fd present";
-					(*None*)
-					let fds = [] in
-					Some fds
-				| None, false ->
-				    debug "start_vgpu: starting with vgpu";
-					let fds = [] in
-					Some fds
-				| Some fd, _ ->
+			let fds = match restore_fd with
+				| None -> []
+				| Some fd ->
 					let uuid = Uuidm.to_string (Uuidm.create `V4) in
-					let fds = [uuid, fd] in
-				    debug "start_vgpu: restoring with vgpu (fd: %s)" uuid;
-					Some fds
-			in match maybe_fds with
-			| None -> ()
-			| Some [] -> 
-			    let args = vgpu_args_of_nvidia domid vcpus vgpu [] in
-				let vgpu_pid = init_daemon ~task ~path:!Xc_resources.vgpu ~args
-					~name:"vgpu" ~domid ~xs ~ready_path:state_path ~timeout:!Xenopsd.vgpu_ready_timeout
-					~cancel ~fds:[] () in
-				Forkhelpers.dontwaitpid vgpu_pid
-			| Some fds ->
-				let args = vgpu_args_of_nvidia domid vcpus vgpu fds in
-				let vgpu_pid = init_daemon ~task ~path:!Xc_resources.vgpu ~args
-					~name:"vgpu" ~domid ~xs ~ready_path:state_path ~timeout:!Xenopsd.vgpu_ready_timeout
-					~cancel ~fds () in
-				(* Kill vgpu before restarting it with the correct informations *)
-				match Vgpu.pid ~xs domid with
-				| Some pid -> Unix.kill pid 9 (*SIGKILL*);
-				| None -> ();
-				Forkhelpers.dontwaitpid vgpu_pid
+					[uuid, fd]
+			in
+			let args = vgpu_args_of_nvidia domid vcpus vgpu fds in
+			let vgpu_pid = init_daemon ~task ~path:!Xc_resources.vgpu ~args
+				~name:"vgpu" ~domid ~xs ~ready_path:state_path ~timeout:!Xenopsd.vgpu_ready_timeout
+				~cancel ~fds () in
+			Forkhelpers.dontwaitpid vgpu_pid
 		end else
 			info "Daemon %s is already running for domain %d" !Xc_resources.vgpu domid;
 
-			(* Keep waiting until DEMU's state becomes "running", which means that it is
-			* ready to run the VM. *)
-			let good_watch = Watch.value_to_become state_path "running" in
-			let error_watch = Watch.value_to_become state_path "error" in
-			if cancellable_watch cancel [ good_watch ] [ error_watch ] task ~xs ~timeout:3600. () then
-				info "Daemon vgpu is ready"
-			else begin
-				let error_code_path = Printf.sprintf "/local/domain/%d/vgpu/error-code" domid in
-				let error_code = xs.Xs.read error_code_path in
-				error "Daemon vgpu returned error: %s" error_code;
-				raise (Ioemu_failed ("vgpu", Printf.sprintf "Daemon vgpu returned error: %s" error_code))
-			end
+		(* Keep waiting until DEMU's state becomes "running", which means that it is
+		 * ready to run the VM. *)
+		let good_watch = Watch.value_to_become state_path "running" in
+		let error_watch = Watch.value_to_become state_path "error" in
+		if cancellable_watch cancel [ good_watch ] [ error_watch ] task ~xs ~timeout:3600. () then
+			info "Daemon vgpu is ready"
+		else begin
+			let error_code_path = Printf.sprintf "/local/domain/%d/vgpu/error-code" domid in
+			let error_code = xs.Xs.read error_code_path in
+			error "Daemon vgpu returned error: %s" error_code;
+			raise (Ioemu_failed ("vgpu", Printf.sprintf "Daemon vgpu returned error: %s" error_code))
+		end
 
 	| [{implementation = GVT_g vgpu}] ->
 		PCI.bind [vgpu.physical_pci_address] PCI.I915
