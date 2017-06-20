@@ -1345,10 +1345,27 @@ and trigger_cleanup_after_failure op t =
 	| VBD_check_state _
 	| VIF_check_state _ -> () (* not state changing operations *)
 
+	(* CA-254911: delay the shutdown check and move it to a different
+	 * thread to try and mitigate the risk of stack overflow due to 
+	 * exceptional issues *)
+	| VM_shutdown (id, _) ->
+		let from = Updates.last_id dbg updates in
+		let op = (VM_check_state id) in
+		let task = Xenops_task.add tasks dbg (fun t -> perform op t; None) in
+		Redirector.push Redirector.parallel_queues id (op, task);
+		let timeout_start = Unix.gettimeofday () in
+		event_wait updates task ~from ~timeout_start 1200.0 (task_finished_p (Xenops_task.id_of_handle task)) |> ignore;
+		begin match Xenops_task.get_state task with
+		| Task.Pending _ -> assert false
+		| Task.Completed _ -> ()
+		| Task.Failed e ->
+			let e = e |> Exception.exnty_of_rpc |> exn_of_exnty in
+			raise e
+		end;
+
 	| VM_start (id, _)
 	| VM_poweroff (id, _)
 	| VM_reboot (id, _)
-	| VM_shutdown (id, _)
 	| VM_suspend (id, _)
 	| VM_restore_vifs id
 	| VM_restore_devices (id, _)
