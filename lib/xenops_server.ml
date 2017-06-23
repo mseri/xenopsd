@@ -983,6 +983,22 @@ let rec atomics_of_operation = function
 		]
 	| _ -> []
 
+let queue_and_wait ~progress_callback ~max_parallel_atoms dbg kind id enqueuer ops =
+	let from = Updates.last_id dbg updates in
+	Xenops_utils.chunks max_parallel_atoms ops
+	|> List.mapi (fun chunk_idx ops ->
+		debug "queue_%s_and_wait: %s: chunk of %d atoms" kind dbg (List.length ops);
+		let task_list = List.mapi (fun atom_idx op ->
+			(* atom_id is a unique name for a parallel atom worker queue *)
+			let atom_id = Printf.sprintf "%s.chunk=%d.atom=%d" id chunk_idx atom_idx in
+			enqueuer ~progress_callback dbg atom_id op
+			) ops
+		in
+		let timeout_start = Unix.gettimeofday () in
+		List.iter (fun task -> event_wait updates task ~from ~timeout_start 1200.0 (task_finished_p (Xenops_task.id_of_handle task)) |> ignore) task_list;
+		task_list
+	) |> List.concat
+
 let rec perform_atomic ~progress_callback ?subtask ?result (op: atomic) (t: Xenops_task.task_handle) : unit =
 	let module B = (val get_backend () : S) in
 	Xenops_task.check_cancelling t;
@@ -1277,20 +1293,7 @@ and queue_atomic_int ~progress_callback dbg id op =
 	task
 
 and queue_atomics_and_wait ~progress_callback ~max_parallel_atoms dbg id ops =
-	let from = Updates.last_id dbg updates in
-	Xenops_utils.chunks max_parallel_atoms ops
-	|> List.mapi (fun chunk_idx ops ->
-		debug "queue_atomics_and_wait: %s: chunk of %d atoms" dbg (List.length ops);
-		let task_list = List.mapi (fun atom_idx op ->
-			(* atom_id is a unique name for a parallel atom worker queue *)
-			let atom_id = Printf.sprintf "%s.chunk=%d.atom=%d" id chunk_idx atom_idx in
-			queue_atomic_int ~progress_callback dbg atom_id op
-			) ops
-		in
-		let timeout_start = Unix.gettimeofday () in
-		List.iter (fun task -> event_wait updates task ~from ~timeout_start 1200.0 (task_finished_p (Xenops_task.id_of_handle task)) |> ignore) task_list;
-		task_list
-	) |> List.concat
+	queue_and_wait ~progress_callback ~max_parallel_atoms "atomic" dbg id queue_atomic_int ops
 
 (* Used to divide up the progress (bar) amongst atomic operations *)
 let weight_of_atomic = function
@@ -1328,11 +1331,11 @@ let rec immediate_operation dbg id op =
 			Xenops_task.run task
 		) ();
 	match Xenops_task.get_state task with
-		| Task.Pending _ -> assert false
-		| Task.Completed _ -> ()
-		| Task.Failed e ->
-			let e = e |> Exception.exnty_of_rpc |> exn_of_exnty in
-			raise e
+	| Task.Pending _ -> assert false
+	| Task.Completed _ -> ()
+	| Task.Failed e ->
+		let e = e |> Exception.exnty_of_rpc |> exn_of_exnty in
+		raise e
 
 and queue_operation_int ~progress_callback dbg id op =
 	let task = Xenops_task.add tasks dbg (let r = ref None in fun t -> perform ~result:r op t; !r) in
@@ -1340,21 +1343,11 @@ and queue_operation_int ~progress_callback dbg id op =
 	task
 
 and queue_operations_and_wait ~progress_callback ~max_parallel_atoms dbg id ops =
-	let from = Updates.last_id dbg updates in
-	Xenops_utils.chunks max_parallel_atoms ops
-	|> List.mapi (fun chunk_idx ops ->
-		debug "queue_operation_and_wait: %s: chunk of %d atoms" dbg (List.length ops);
-		let task_list = List.mapi (fun op_idx op -> 
-			(* op_id is a unique name for a parallel op worker queue *)
-			let op_id = Printf.sprintf "%s.chunk=%d.op=%d" id chunk_idx op_idx in
-			queue_operation_int ~progress_callback dbg op_id op
-			) ops
-		in
-		let timeout_start = Unix.gettimeofday () in
-		List.iter (fun task -> event_wait updates task ~from ~timeout_start 1200.0 (task_finished_p (Xenops_task.id_of_handle task)) |> ignore) task_list;
-		task_list
-	) |> List.concat
+	queue_and_wait ~progress_callback ~max_parallel_atoms "operation" dbg id queue_operation_int ops
 
+(* CA-254911: delay the cleanups checks and move them to a different
+ * thread to try and mitigate the risk of stack overflow due to 
+ * exceptional issues *)
 and deferred_operation dbg id op =
 	let task = 
 		let tasks = queue_operations_and_wait ~progress_callback:(fun _ -> ()) ~max_parallel_atoms:1 dbg id [op] in
@@ -1363,18 +1356,15 @@ and deferred_operation dbg id op =
 		| _ -> assert false
 	in
 	match Xenops_task.get_state task with
-		| Task.Pending _ -> assert false
-		| Task.Completed _ -> ()
-		| Task.Failed e ->
-			let e = e |> Exception.exnty_of_rpc |> exn_of_exnty in
-			raise e
+	| Task.Pending _ -> assert false
+	| Task.Completed _ -> ()
+	| Task.Failed e ->
+		let e = e |> Exception.exnty_of_rpc |> exn_of_exnty in
+		raise e
 
 (* At all times we ensure that an operation which partially fails
  * leaves the system in a recoverable state. All that should be
  * necessary is to call the {VM,VBD,VIF,PCI}_check_state function. *)
-(* CA-254911: delay the shutdown check and move it to a different
- * thread to try and mitigate the risk of stack overflow due to 
- * exceptional issues *)
 and trigger_cleanup_after_failure op t =
 	let dbg = (Xenops_task.to_interface_task t).Task.dbg in
 	match op with
