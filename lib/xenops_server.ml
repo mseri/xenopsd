@@ -991,22 +991,6 @@ let rec atomics_of_operation = function
 		]
 	| _ -> []
 
-let queue_and_wait ~progress_callback ~max_parallel_atoms dbg kind id enqueuer ops =
-	let from = Updates.last_id dbg updates in
-	Xenops_utils.chunks max_parallel_atoms ops
-	|> List.mapi (fun chunk_idx ops ->
-		debug "queue_%s_and_wait: %s: chunk of %d %s" kind dbg (List.length ops) kind;
-		let task_list = List.mapi (fun atom_idx op ->
-			(* atom_id is a unique name for a parallel atom/operation worker queue *)
-			let atom_id = Printf.sprintf "%s.chunk=%d.%s=%d" id chunk_idx kind atom_idx in
-			enqueuer ~progress_callback dbg atom_id op
-			) ops
-		in
-		let timeout_start = Unix.gettimeofday () in
-		List.iter (fun task -> event_wait updates task ~from ~timeout_start 1200.0 (task_finished_p (Xenops_task.id_of_handle task)) |> ignore) task_list;
-		task_list
-	) |> List.concat
-
 let rec perform_atomic ~progress_callback ?subtask ?result (op: atomic) (t: Xenops_task.task_handle) : unit =
 	let module B = (val get_backend () : S) in
 	Xenops_task.check_cancelling t;
@@ -1301,7 +1285,20 @@ and queue_atomic_int ~progress_callback dbg id op =
 	task
 
 and queue_atomics_and_wait ~progress_callback ~max_parallel_atoms dbg id ops =
-	queue_and_wait ~progress_callback ~max_parallel_atoms "atomics" dbg id queue_atomic_int ops
+	let from = Updates.last_id dbg updates in
+	Xenops_utils.chunks max_parallel_atoms ops
+	|> List.mapi (fun chunk_idx ops ->
+		debug "queue_atomics_and_wait: %s: chunk of %d atoms" dbg (List.length ops);
+		let task_list = List.mapi (fun atom_idx op->
+			(* atom_id is a unique name for a parallel atom worker queue *)
+			let atom_id = Printf.sprintf "%s.chunk=%d.atom=%d" id chunk_idx atom_idx in
+			queue_atomic_int ~progress_callback dbg atom_id op
+			) ops
+		in
+		let timeout_start = Unix.gettimeofday () in
+		List.iter (fun task-> event_wait updates task ~from ~timeout_start 1200.0 (task_finished_p (Xenops_task.id_of_handle task)) |> ignore) task_list;
+		task_list
+) |> List.concat
 
 (* Used to divide up the progress (bar) amongst atomic operations *)
 let weight_of_atomic = function
@@ -1345,26 +1342,24 @@ let rec immediate_operation dbg id op =
 		let e = e |> Exception.exnty_of_rpc |> exn_of_exnty in
 		raise e
 
-and queue_operation_int ~progress_callback dbg id op =
-	debug "queue_operation_and_wait: %s" dbg;
+and queue_operation_int dbg id op =
 	let task = Xenops_task.add tasks dbg (let r = ref None in fun t -> perform ~result:r op t; !r) in
 	let tag = if uses_mxgpu id then "mxgpu" else id in
 	Redirector.push Redirector.default tag (op, task);
 	task
 
 and queue_operation dbg id op =
-	let task = queue_operation_int ~progress_callback:(fun _ -> ()) dbg id op in
+	debug "queue_operation: %s" dbg;
+	let task = queue_operation_int dbg id op in
 	Xenops_task.id_of_handle task
 
 and queue_operation_and_wait dbg id op =
+	debug "queue_operation_and_wait: %s" dbg;
 	let from = Updates.last_id dbg updates in
-	let task = queue_operation_int ~progress_callback:(fun _ -> ()) dbg id op in
+	let task = queue_operation_int dbg id op in
 	let task_id = Xenops_task.id_of_handle task in
 	event_wait updates task ~from 1200.0 (task_finished_p task_id) |> ignore;
 	task
-
-and queue_operations_and_wait ~progress_callback ~max_parallel_atoms dbg id ops =
-	queue_and_wait ~progress_callback ~max_parallel_atoms "operations" dbg id queue_operation_int ops
 
 (* CA-254911: delay the cleanups checks and move them to a different
  * thread to try and mitigate the risk of stack overflow due to 
