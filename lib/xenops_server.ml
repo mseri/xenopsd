@@ -790,6 +790,14 @@ let pci_plug_order pcis =
 let vgpu_plug_order vgpus =
 	List.sort (fun a b -> compare a.Vgpu.position b.Vgpu.position) vgpus
 
+let uses_mxgpu id =
+	List.exists (fun vgpu_id ->
+		let vgpu = VGPU_DB.read_exn vgpu_id in
+		match vgpu.Vgpu.implementation with
+		| Vgpu.MxGPU _ -> true
+		| _ -> false
+	) (VGPU_DB.ids id)
+
 let simplify f =
 	let module B = (val get_backend () : S) in
 	if B.simplified then [] else f
@@ -987,10 +995,10 @@ let queue_and_wait ~progress_callback ~max_parallel_atoms dbg kind id enqueuer o
 	let from = Updates.last_id dbg updates in
 	Xenops_utils.chunks max_parallel_atoms ops
 	|> List.mapi (fun chunk_idx ops ->
-		debug "queue_%s_and_wait: %s: chunk of %d atoms" kind dbg (List.length ops);
+		debug "queue_%s_and_wait: %s: chunk of %d %s" kind dbg (List.length ops) kind;
 		let task_list = List.mapi (fun atom_idx op ->
-			(* atom_id is a unique name for a parallel atom worker queue *)
-			let atom_id = Printf.sprintf "%s.chunk=%d.atom=%d" id chunk_idx atom_idx in
+			(* atom_id is a unique name for a parallel atom/operation worker queue *)
+			let atom_id = Printf.sprintf "%s.chunk=%d.%s=%d" id chunk_idx kind atom_idx in
 			enqueuer ~progress_callback dbg atom_id op
 			) ops
 		in
@@ -1293,7 +1301,7 @@ and queue_atomic_int ~progress_callback dbg id op =
 	task
 
 and queue_atomics_and_wait ~progress_callback ~max_parallel_atoms dbg id ops =
-	queue_and_wait ~progress_callback ~max_parallel_atoms "atomic" dbg id queue_atomic_int ops
+	queue_and_wait ~progress_callback ~max_parallel_atoms "atomics" dbg id queue_atomic_int ops
 
 (* Used to divide up the progress (bar) amongst atomic operations *)
 let weight_of_atomic = function
@@ -1338,23 +1346,31 @@ let rec immediate_operation dbg id op =
 		raise e
 
 and queue_operation_int ~progress_callback dbg id op =
+	debug "queue_operation_and_wait: %s" dbg;
 	let task = Xenops_task.add tasks dbg (let r = ref None in fun t -> perform ~result:r op t; !r) in
-	Redirector.push Redirector.parallel_queues id (op, task);
+	let tag = if uses_mxgpu id then "mxgpu" else id in
+	Redirector.push Redirector.default tag (op, task);
+	task
+
+and queue_operation dbg id op =
+	let task = queue_operation_int ~progress_callback:(fun _ -> ()) dbg id op in
+	Xenops_task.id_of_handle task
+
+and queue_operation_and_wait dbg id op =
+	let from = Updates.last_id dbg updates in
+	let task = queue_operation_int ~progress_callback:(fun _ -> ()) dbg id op in
+	let task_id = Xenops_task.id_of_handle task in
+	event_wait updates task ~from 1200.0 (task_finished_p task_id) |> ignore;
 	task
 
 and queue_operations_and_wait ~progress_callback ~max_parallel_atoms dbg id ops =
-	queue_and_wait ~progress_callback ~max_parallel_atoms "operation" dbg id queue_operation_int ops
+	queue_and_wait ~progress_callback ~max_parallel_atoms "operations" dbg id queue_operation_int ops
 
 (* CA-254911: delay the cleanups checks and move them to a different
  * thread to try and mitigate the risk of stack overflow due to 
  * exceptional issues *)
 and deferred_operation dbg id op =
-	let task = 
-		let tasks = queue_operations_and_wait ~progress_callback:(fun _ -> ()) ~max_parallel_atoms:1 dbg id [op] in
-		match tasks with
-		| [task] -> task
-		| _ -> assert false
-	in
+	let task = queue_operation_and_wait dbg id op in
 	match Xenops_task.get_state task with
 	| Task.Pending _ -> assert false
 	| Task.Completed _ -> ()
@@ -1725,31 +1741,6 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.task_handle) : unit
 	match subtask with
 		| None -> one op
 		| Some name -> Xenops_task.with_subtask t name (fun () -> one op)
-
-let uses_mxgpu id =
-	List.exists (fun vgpu_id ->
-		let vgpu = VGPU_DB.read_exn vgpu_id in
-		match vgpu.Vgpu.implementation with
-		| Vgpu.MxGPU _ -> true
-		| _ -> false
-	) (VGPU_DB.ids id)
-
-let queue_operation_int dbg id op =
-	let task = Xenops_task.add tasks dbg (let r = ref None in fun t -> perform ~result:r op t; !r) in
-	let tag = if uses_mxgpu id then "mxgpu" else id in
-	Redirector.push Redirector.default tag (op, task);
-	task
-
-let queue_operation dbg id op =
-	let task = queue_operation_int dbg id op in
-	Xenops_task.id_of_handle task
-
-let queue_operation_and_wait dbg id op =
-	let from = Updates.last_id dbg updates in
-	let task = queue_operation_int dbg id op in
-	let task_id = Xenops_task.id_of_handle task in
-	event_wait updates task ~from 1200.0 (task_finished_p task_id) |> ignore;
-	task
 
 module PCI = struct
 	open Pci
