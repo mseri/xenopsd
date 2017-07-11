@@ -1821,8 +1821,6 @@ module VM = struct
 		in
 		DB.write k { VmExtra.persistent = persistent; VmExtra.non_persistent = non_persistent; }
 
-	exception Ballooning_timeout of int
-
 	let wait_ballooning task vm timeout =
 		on_domain
 			(fun xc xs _ _ di ->
@@ -1834,15 +1832,22 @@ module VM = struct
 					with _ -> None
 				in
 				match balloon_active with
+				(* Not Windows or Windows is not currently ballooning *)
 				| None | Some "0" -> ()
+				(* Ballooning in progress, we need to wait *)
 				| Some _ -> 
+					let watches = [ Watch.value_to_become balloon_active_path "0"
+												; Watch.key_to_disappear balloon_active_path ]
+					in
+					(* raise Cancelled on task cancellation and Watch.Timeout on timeout *)
 					try
-						let watches = [ Watch.value_to_become balloon_active_path "0"
-						              ; Watch.key_to_disappear balloon_active_path ]
-						in
 						cancellable_watch (Domain domid) watches [] task ~xs ~timeout ()
 						|> ignore
-					with Cancelled(_) -> (* error *) raise (Ballooning_timeout domid)
+					with Watch.Timeout _ ->
+						let msg = Printf.sprintf 
+							"Ballooning Timeout: unable to balloon down the memory of vm %s, please increase the value of memory-dynamic-min"
+							vm.Vm.id
+						in raise (Internal_error msg)
 			) Expect_only_one task vm
 
 	let minimum_reboot_delay = 120.

@@ -1501,7 +1501,11 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 			let atomic = VM_set_memory_dynamic_range(id, vm.Vm.memory_dynamic_min, vm.Vm.memory_dynamic_min) in
 			let (_: unit) = perform_atomic ~subtask:(string_of_atomic atomic) ~progress_callback:(fun _ -> ()) atomic t in
 
-			B.VM.wait_ballooning t vm 120.0;
+			(* Waiting here is not essential but adds a degree of safety
+			 * and reducess unnecessary memory copying. *)
+			begin try
+				B.VM.wait_ballooning t vm 120.0
+			with Watch.Timeout _ -> () end;
 
 			(* Find out the VM's current memory_limit: this will be used to allocate memory on the receiver *)
 			let state = B.VM.get_state vm in
@@ -1536,9 +1540,9 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 
 					begin try
 						B.VM.wait_ballooning t vm 120.0
-					with e ->
-						Handshake.send ~verbose:true mfd (Handshake.Error (Printexc.to_string e));
-						raise e
+					with Internal_error msg ->
+						Handshake.send ~verbose:true mfd (Handshake.Error msg);
+						raise (Internal_error msg)
 					end;
 
 					perform_atomics [
