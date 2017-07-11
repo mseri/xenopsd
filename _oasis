@@ -80,7 +80,6 @@ Library xenopsd
     sexplib.syntax,
     xcp,
     uutf,
-    ezxenstore,
     xenstore,
     xenstore.unix,
     xenstore_transport,

@@ -1503,9 +1503,7 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 
 			(* Waiting here is not essential but adds a degree of safety
 			 * and reducess unnecessary memory copying. *)
-			begin try
-				B.VM.wait_ballooning t vm 120.0
-			with Watch.Timeout _ -> () end;
+			(try B.VM.wait_ballooning t vm with Internal_error _ -> ());
 
 			(* Find out the VM's current memory_limit: this will be used to allocate memory on the receiver *)
 			let state = B.VM.get_state vm in
@@ -1537,13 +1535,6 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 							raise (Internal_error msg)
 					end;
 					debug "Synchronisation point 1";
-
-					begin try
-						B.VM.wait_ballooning t vm 120.0
-					with Internal_error msg ->
-						Handshake.send ~verbose:true mfd (Handshake.Error msg);
-						raise (Internal_error msg)
-					end;
 
 					perform_atomics [
 						VM_save(id, [ Live ], FD mfd)

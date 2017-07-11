@@ -1466,6 +1466,35 @@ module VM = struct
 			)
 		| FD fd -> f fd
 
+	let wait_ballooning task vm =
+		on_domain
+			(fun xc xs _ _ di ->
+				let domid = di.Xenctrl.domid in
+				let balloon_active_path = xs.Xs.getdomainpath domid ^ "/control/balloon-active" in
+				let balloon_active =
+					try
+						Some (xs.Xs.read balloon_active_path)
+					with _ -> None
+				in
+				match balloon_active with
+				(* Not Windows or Windows is not currently ballooning *)
+				| None | Some "0" -> ()
+				(* Ballooning in progress, we need to wait *)
+				| Some _ -> 
+					let watches = [ Watch.value_to_become balloon_active_path "0"
+												; Watch.key_to_disappear balloon_active_path ]
+					in
+					(* raise Cancelled on task cancellation and Watch.Timeout on timeout *)
+					try
+						cancellable_watch (Domain domid) watches [] task ~xs ~timeout:120.0 ()
+						|> ignore
+					with Watch.Timeout _ ->
+						let msg = Printf.sprintf 
+							"Ballooning Timeout: unable to balloon down the memory of vm %s, please increase the value of memory-dynamic-min"
+							vm.Vm.id
+						in raise (Internal_error msg)
+			) Expect_only_one task vm
+
 	let save task progress_callback vm flags data =
 		let flags' =
 			List.map
@@ -1484,6 +1513,8 @@ module VM = struct
 						let vm_str = Vm.sexp_of_t vm |> Sexplib.Sexp.to_string in
 						Domain.suspend task ~xc ~xs ~hvm ~progress_callback ~qemu_domid (choose_xenguest vm.Vm.platformdata) vm_str domid fd flags'
 							(fun () ->
+								(* SCTX-2558: wait more for windows ballooning if needed *)
+								wait_ballooning task vm;
 								if not(request_shutdown task vm Suspend 30.)
 								then raise (Failed_to_acknowledge_shutdown_request);
 								if not(wait_shutdown task vm Suspend 1200.)
@@ -1820,35 +1851,6 @@ module VM = struct
 		| Some vmextra -> vmextra.VmExtra.non_persistent
 		in
 		DB.write k { VmExtra.persistent = persistent; VmExtra.non_persistent = non_persistent; }
-
-	let wait_ballooning task vm timeout =
-		on_domain
-			(fun xc xs _ _ di ->
-				let domid = di.Xenctrl.domid in
-				let balloon_active_path = xs.Xs.getdomainpath domid ^ "/control/balloon-active" in
-				let balloon_active =
-					try
-						Some (xs.Xs.read balloon_active_path)
-					with _ -> None
-				in
-				match balloon_active with
-				(* Not Windows or Windows is not currently ballooning *)
-				| None | Some "0" -> ()
-				(* Ballooning in progress, we need to wait *)
-				| Some _ -> 
-					let watches = [ Watch.value_to_become balloon_active_path "0"
-												; Watch.key_to_disappear balloon_active_path ]
-					in
-					(* raise Cancelled on task cancellation and Watch.Timeout on timeout *)
-					try
-						cancellable_watch (Domain domid) watches [] task ~xs ~timeout ()
-						|> ignore
-					with Watch.Timeout _ ->
-						let msg = Printf.sprintf 
-							"Ballooning Timeout: unable to balloon down the memory of vm %s, please increase the value of memory-dynamic-min"
-							vm.Vm.id
-						in raise (Internal_error msg)
-			) Expect_only_one task vm
 
 	let minimum_reboot_delay = 120.
 end
