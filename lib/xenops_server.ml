@@ -1501,6 +1501,8 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 			let atomic = VM_set_memory_dynamic_range(id, vm.Vm.memory_dynamic_min, vm.Vm.memory_dynamic_min) in
 			let (_: unit) = perform_atomic ~subtask:(string_of_atomic atomic) ~progress_callback:(fun _ -> ()) atomic t in
 
+			B.VM.wait_ballooning t vm 3600.0;
+
 			(* Find out the VM's current memory_limit: this will be used to allocate memory on the receiver *)
 			let state = B.VM.get_state vm in
 			info "VM %s has memory_limit = %Ld" id state.Vm.memory_limit;

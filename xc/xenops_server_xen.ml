@@ -1821,6 +1821,30 @@ module VM = struct
 		in
 		DB.write k { VmExtra.persistent = persistent; VmExtra.non_persistent = non_persistent; }
 
+	exception Ballooning_timeout of int
+
+	let wait_ballooning task vm timeout =
+		on_domain
+			(fun xc xs _ _ di ->
+				let domid = di.Xenctrl.domid in
+				let balloon_active_path = xs.Xs.getdomainpath domid ^ "/control/balloon-active" in
+				let balloon_active =
+					try
+						Some (xs.Xs.read balloon_active_path)
+					with _ -> None
+				in
+				match balloon_active with
+				| None | Some "0" -> ()
+				| Some _ -> 
+					try
+						let watches = [ Watch.value_to_become balloon_active_path "0"
+						              ; Watch.key_to_disappear balloon_active_path ]
+						in
+						cancellable_watch (Domain domid) watches [] task ~xs ~timeout ()
+						|> ignore
+					with Cancelled(_) -> (* error *) raise (Ballooning_timeout domid)
+			) Expect_only_one task vm
+
 	let minimum_reboot_delay = 120.
 end
 
