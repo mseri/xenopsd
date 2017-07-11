@@ -1501,7 +1501,7 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 			let atomic = VM_set_memory_dynamic_range(id, vm.Vm.memory_dynamic_min, vm.Vm.memory_dynamic_min) in
 			let (_: unit) = perform_atomic ~subtask:(string_of_atomic atomic) ~progress_callback:(fun _ -> ()) atomic t in
 
-			B.VM.wait_ballooning t vm 3600.0;
+			B.VM.wait_ballooning t vm 120.0;
 
 			(* Find out the VM's current memory_limit: this will be used to allocate memory on the receiver *)
 			let state = B.VM.get_state vm in
@@ -1533,6 +1533,13 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 							raise (Internal_error msg)
 					end;
 					debug "Synchronisation point 1";
+
+					begin try
+						B.VM.wait_ballooning t vm 120.0
+					with e ->
+						Handshake.send ~verbose:true mfd (Handshake.Error (Printexc.to_string e));
+						raise e
+					end;
 
 					perform_atomics [
 						VM_save(id, [ Live ], FD mfd)
