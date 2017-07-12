@@ -1492,7 +1492,7 @@ module VM = struct
 						let msg = Printf.sprintf 
 							"Ballooning Timeout: unable to balloon down the memory of vm %s, please increase the value of memory-dynamic-min"
 							vm.Vm.id
-						in raise (Internal_error msg)
+						in raise (Xenops_interface.Internal_error msg)
 			) Oldest task vm
 
 	let save task progress_callback vm flags data =
