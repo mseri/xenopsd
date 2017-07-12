@@ -13,7 +13,6 @@
  *)
 
 open Xenops_interface
-open Memory_interface
 open Xenops_utils
 open Xenops_server_plugin
 open Xenops_helpers
@@ -438,7 +437,7 @@ module Mem = struct
 		let (_: unit option) = wrap (fun () -> transfer_reservation_to_domain_exn dbg domid r) in
 		()
 
-        let query_reservation_of_domain dbg domid =
+				let query_reservation_of_domain dbg domid =
                 match get_session_id dbg with
                         | Some session_id ->
                                 begin
@@ -458,7 +457,7 @@ module Mem = struct
                                 info "No ballooning daemon. Cannot query reservation_id for domid = %d" domid;
                                 raise No_reservation
 
-	(** After an event which frees memory (eg a domain destruction), perform a one-off memory rebalance *)
+  (** After an event which frees memory (eg a domain destruction), perform a one-off memory rebalance *)
 	let balance_memory dbg =
 		debug "rebalance_memory";
 		Client.balance_memory dbg
