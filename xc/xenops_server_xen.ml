@@ -1486,7 +1486,7 @@ module VM = struct
 					in
 					(* raise Cancelled on task cancellation and Watch.Timeout on timeout *)
 					try
-						cancellable_watch (Domain domid) watches [] task ~xs ~timeout:120.0 ()
+						cancellable_watch (Domain domid) watches [] task ~xs ~timeout:!Xenopsd.additional_ballooning_timeout ()
 						|> ignore
 					with Watch.Timeout _ ->
 						let msg = Printf.sprintf 

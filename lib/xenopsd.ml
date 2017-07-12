@@ -37,6 +37,8 @@ let watch_queue_length = ref 1000
 let default_vbd_backend_kind = ref "vbd"
 let ca_140252_workaround = ref false
 
+let additional_ballooning_timeout = ref 120.
+
 let options = [
     "queue", Arg.Set_string Xenops_interface.queue_name, (fun () -> !Xenops_interface.queue_name), "Listen on a specific queue";
     "sockets-path", Arg.Set_string sockets_path, (fun () -> !sockets_path), "Directory to create listening sockets";
@@ -51,7 +53,8 @@ let options = [
     "watch_queue_length", Arg.Set_int watch_queue_length, (fun () -> string_of_int !watch_queue_length), "Maximum number of unprocessed xenstore watch events before we restart";
     "use-upstream-qemu", Arg.Bool (fun x -> use_upstream_qemu := x), (fun () -> string_of_bool !use_upstream_qemu), "True if we want to use upsteam QEMU";
     "default-vbd-backend-kind", Arg.Set_string default_vbd_backend_kind, (fun () -> !default_vbd_backend_kind), "Default backend for VBDs";
-    "ca-140252-workaround", Arg.Bool (fun x -> ca_140252_workaround := x), (fun () -> string_of_bool !ca_140252_workaround), "Workaround for evtchn misalignment for legacy PV tools";
+		"ca-140252-workaround", Arg.Bool (fun x -> ca_140252_workaround := x), (fun () -> string_of_bool !ca_140252_workaround), "Workaround for evtchn misalignment for legacy PV tools";
+		"additional-ballooning-timeout", Arg.Set_float additional_ballooning_timeout, (fun () -> string_of_float !additional_ballooning_timeout), "Time we allow the windows guests to do additional memory ballooning before live migration";
 ]
 
 let path () = Filename.concat !sockets_path "xenopsd"
