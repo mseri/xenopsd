@@ -1493,7 +1493,7 @@ module VM = struct
 							"Ballooning Timeout: unable to balloon down the memory of vm %s, please increase the value of memory-dynamic-min"
 							vm.Vm.id
 						in raise (Internal_error msg)
-			) Expect_only_one task vm
+			) Oldest task vm
 
 	let save task progress_callback vm flags data =
 		let flags' =
