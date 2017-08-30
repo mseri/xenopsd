@@ -155,7 +155,7 @@ Executable xenopsd_xc_main
     xcp.storage,
     xcp.memory,
     xcp.rrd,
-    rrd,
+    xapi-rrd,
     sexplib,
     xcp-inventory,
     ezxenstore,
