@@ -370,6 +370,7 @@ module FileFS = struct
     try
       Some (filename_of path |> Unixext.string_of_file |> Jsonrpc.of_string)
     with e ->
+      debug "Read error: %s" (Printexc.to_string e);
       None
   let write path x =
     let filename = filename_of path in
@@ -514,19 +515,24 @@ module TypedTable = functor(I: ITEM) -> struct
   (* Thread-safe functions *)
 
   let read (k: I.key) =
+    debug "TypedTable: Reading %s" (k |> I.key |> of_key |> String.concat "/");
     let module FS = (val get_fs_backend () : FS) in
     let path = k |> I.key |> of_key in
     Opt.map (fun x -> t_of_rpc x) (FS.read path)
 
-  let read_exn (k: I.key) = match read k with
+  let read_exn (k: I.key) =
+    debug "TypedTable: Read_exn %s" (k |> I.key |> of_key |> String.concat "/");
+    match read k with
     | Some x -> x
     | None -> raise (Does_not_exist (I.namespace, I.key k |> String.concat "/"))
 
   let exists (k: I.key) =
+    debug "TypedTable: Exists %s" (k |> I.key |> of_key |> String.concat "/");
     let module FS = (val get_fs_backend () : FS) in
     FS.exists (k |> I.key |> of_key)
 
   let list (k: key) =
+    debug "TypedTable: List %s" (k |> of_key |> String.concat ",");
     let module FS = (val get_fs_backend () : FS) in
     FS.readdir (k |> of_key)
 
@@ -547,7 +553,7 @@ module TypedTable = functor(I: ITEM) -> struct
       let path = k |> I.key |> of_key |> String.concat "/" in
       debug "TypedTable: Removing %s" path;
       if not(exists k) then begin
-        debug "Key %s does not exist" path;
+        debug "TypedTable: Key %s does not exist" path;
         raise (Does_not_exist(I.namespace, path))
       end else delete k
   )
@@ -560,23 +566,24 @@ module TypedTable = functor(I: ITEM) -> struct
      Note that `f` should never itself include an `add`, `remove` or another
      `update` or deadlock will occur! *)
   let update (k: I.key) (f: t option -> t option) : bool =
+    debug "TypedTable: Updating %s" (k |> I.key |> of_key |> String.concat "/");
     Mutex.execute m (fun () ->
-      let x = read k in
-      let y = f x in
-      (* Only update the DB if the value has changed *)
-      if x <> y then
+        let x = read k in
+        let y = f x in
+        (* Only update the DB if the value has changed *)
         match y with
-        | None    -> delete k; true
-        | Some y' -> write k y'; true
-      else
-        false
-    )
+        | None when x <> y -> debug "TypedTable: deleting key"; delete k; true
+        | None -> debug "TypedTable: deletion not performed as the value was unchanged"; false
+        | Some y' when x <> y -> debug "TypedTable: updating key with %s" (y' |> I.rpc_of_t |> Rpc.to_string); write k y'; true
+        | Some y' -> debug "TypedTable: not updating key as the value is unchanged (%s)" (y' |> I.rpc_of_t |> Rpc.to_string); false
+      )
 
   (* Version of `update` that raises an exception if the read fails *)
   let update_exn (k: I.key) (f: t -> t option) =
+    debug "TypedTable: Update_exn %s" (k |> I.key |> of_key |> String.concat "/");
     update k (
       function
-      | None -> raise (Does_not_exist (I.namespace, I.key k |> String.concat "/"))
+      | None -> debug "TypedTable: key %s not present" (k |> I.key |> of_key |> String.concat "/"); raise (Does_not_exist (I.namespace, I.key k |> String.concat "/"))
       | Some x -> f x
     )
 end
