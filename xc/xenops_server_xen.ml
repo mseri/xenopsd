@@ -3040,7 +3040,10 @@ module Actions = struct
 
   let unmanaged_domain domid id = 
     if domid > 0 && not (DB.exists id)
-    then failwith (Printf.sprintf "Domid %d does not exist!" domid)
+    then (
+      debug "unmanaged_domain %d %s: true" domid id;
+      true
+    )
     else false
 
   let found_running_domain domid id =
@@ -3049,13 +3052,18 @@ module Actions = struct
   let device_watches = ref IntMap.empty
 
   let domain_appeared xc xs domid =
+    debug "domain_appeared: %d" domid;
     device_watches := IntMap.add domid [] !device_watches
 
   let domain_disappeared xc xs domid =
+    debug "domain_disappeared: %d" domid;
     let token = watch_token domid in
     List.iter (fun d ->
-        List.iter (Xenstore_watch.unwatch ~xs token) (watches_of_device d)
+        let watches = watches_of_device d in
+        debug "domain_disappeared %d: remove watches for (%s)" domid (String.concat ", " watches);
+        List.iter (Xenstore_watch.unwatch ~xs token) watches
       ) (try IntMap.find domid !device_watches with Not_found -> []);
+    debug "domain_disappeared: removing %d" domid;
     device_watches := IntMap.remove domid !device_watches;
 
     (* Anyone blocked on a domain/device operation which won't happen because the domain
@@ -3098,11 +3106,13 @@ module Actions = struct
     device_watches := IntMap.add domid (List.filter (fun x -> x <> device) current) !device_watches
 
   let watch_fired xc xs path domains watches =
+    debug "watch_fired for %s" path;
+
     let look_for_different_devices domid =
       if not(Xenstore_watch.IntSet.mem domid watches)
-      then debug "Ignoring frontend device watch on unmanaged domain: %d" domid
+      then debug "watch_fired: Ignoring frontend device watch on unmanaged domain: %d" domid
       else if not(IntMap.mem domid !device_watches)
-      then warn "Xenstore watch fired, but no entry for domid %d in device watches list" domid
+      then warn "watch_fired: Xenstore watch fired, but no entry for domid %d in device watches list" domid
       else begin
         let devices = IntMap.find domid !device_watches in
         let devices' = Device_common.list_frontends ~xs domid in
@@ -3116,7 +3126,7 @@ module Actions = struct
       let d = int_of_string domid in
       let open Xenstore_watch in
       if not(IntMap.mem d domains)
-      then debug "Ignoring watch on shutdown domain %d" d
+      then debug "watch_fired: Ignoring watch on shutdown domain %d" d
       else
         let di = IntMap.find d domains in
         let open Xenctrl in
@@ -3127,7 +3137,7 @@ module Actions = struct
       let d = int_of_string domid in
       let open Xenstore_watch in
       if not(IntMap.mem d domains)
-      then debug "Ignoring watch on shutdown domain %d" d
+      then debug "watch_fired: Ignoring watch on shutdown domain %d" d
       else
         let di = IntMap.find d domains in
         let open Xenctrl in

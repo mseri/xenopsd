@@ -273,7 +273,7 @@ module Unixext = struct
 
 
   let atomic_write_to_file fname perms f =
-    let tmp = Stdext.Filenameext.temp_file_in_dir fname in
+    let tmp = temp_file_in_dir fname in
     Unix.chmod tmp perms;
     finally
       (fun () ->
@@ -349,12 +349,7 @@ module Unixext = struct
 
   let copy_file ?limit ifd ofd = copy_file_internal ?limit (Unix.read ifd) (Unix.write ofd)
 
-  let really_write fd string off n =
-    let written = ref 0 in
-    while !written < n do
-      let wr = Unix.write fd string (off + !written) (n - !written) in
-      written := wr + !written
-    done
+  let really_write fd string off n = Unix.write fd string off n |> ignore
 end
 
 let dropnone x = List.filter_map (Opt.map (fun x -> x)) x
@@ -368,15 +363,25 @@ module FileFS = struct
   let mkdir path = Unixext.mkdir_rec (filename_of path) 0o755
   let read path =
     try
-      Some (filename_of path |> Unixext.string_of_file |> Jsonrpc.of_string)
+      let filename = filename_of path in
+      debug "DB.read %s" filename;
+      Some (filename |> Unixext.string_of_file |> Jsonrpc.of_string)
     with e ->
       debug "Read error: %s" (Printexc.to_string e);
       None
+
   let write path x =
     let filename = filename_of path in
+    let content = Jsonrpc.to_string x in
+    debug "DB.write %s: %s" filename content;
     Unixext.mkdir_rec (Filename.dirname filename) 0o755;
-    Unixext.write_string_to_file filename (Jsonrpc.to_string x)
-  let exists path = Sys.file_exists (filename_of path)
+    Unixext.write_string_to_file filename content
+
+  let exists path =
+    let exists = Sys.file_exists (filename_of path) in
+    debug "DB.exists %s: %b" (filename_of path) exists;
+    exists
+
   let rm path =
     List.iter
       (fun path ->
