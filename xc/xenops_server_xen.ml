@@ -1072,7 +1072,8 @@ module VM = struct
          safe_rm xs (Printf.sprintf "/vss/%s" vm.Vm.id);
       );
     (* Best-effort attempt to remove metadata - if VM has been powered off
-       		 * then it will have already been deleted by VM.destroy *)
+            * then it will have already been deleted by VM.destroy *)
+    debug "DB.remove: domid %s" vm.Vm.id;
     try DB.remove vm.Vm.id
     with Does_not_exist("extra", _) -> ()
 
@@ -1107,7 +1108,9 @@ module VM = struct
       then debug "VM = %s; domid = %d; domain has suspended; preserving domain-level information" vm.Vm.id di.Xenctrl.domid
       else begin
         debug "VM = %s; domid = %d; will not have domain-level information preserved" vm.Vm.id di.Xenctrl.domid;
-        if DB.exists vm.Vm.id then DB.remove vm.Vm.id;
+        let exists = DB.exists vm.Vm.id in 
+        debug "DB.exists %s: %b" vm.Vm.id exists;
+        if exists then DB.remove vm.Vm.id;
       end;
       Domain.destroy task ~xc ~xs ~qemu_domid domid;
       (* Detach any remaining disks *)
@@ -3035,8 +3038,10 @@ module Actions = struct
     let devid = device.frontend.devid in
     List.map (fun k -> Printf.sprintf "/local/domain/%d/backend/%s/%d/%d/%s" be kind fe devid k) interesting_backend_keys
 
-  let unmanaged_domain domid id =
-    domid > 0 && not (DB.exists id)
+  let unmanaged_domain domid id = 
+    if domid > 0 && not (DB.exists id)
+    then failwith (Printf.sprintf "Domid %d does not exist!" domid)
+    else false
 
   let found_running_domain domid id =
     Updates.add (Dynamic.Vm id) internal_updates
